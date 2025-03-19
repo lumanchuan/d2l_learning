@@ -2,6 +2,7 @@ import torch
 import torch.nn as nn
 import numpy as np
 import matplotlib.pyplot as plt
+import random
 
 
 # 简单的噪声预测网络
@@ -9,7 +10,6 @@ class SimpleNoisePredictor(nn.Module):
     def __init__(self, seq_length, hidden_dim=64):
         super().__init__()
         self.seq_length = seq_length
-
         # 时间嵌入
         self.time_mlp = nn.Sequential(
             nn.Linear(1, hidden_dim),
@@ -98,12 +98,31 @@ def generate_sin_data(batch_size, seq_length, noise_scale):
         data.append(y)
     return torch.tensor(data, dtype=torch.float32)
 
+def generate_sin_cos_data(batch_size, seq_length, noise_scale):
+    """生成正弦波训练数据"""
+    x = np.linspace(0, 2 * np.pi, seq_length)
+    data = []
+    for _ in range(batch_size):
+        y = np.sin(x) + np.cos(x) + np.random.normal(0, noise_scale, seq_length)
+        data.append(y)
+    return torch.tensor(data, dtype=torch.float32)
+
+def generate_cos_data(batch_size, seq_length, noise_scale):
+    """生成正弦波训练数据"""
+    x = np.linspace(0, 2 * np.pi, seq_length)
+    data = []
+    for _ in range(batch_size):
+        y = np.cos(x) + np.random.normal(0, noise_scale, seq_length)
+        data.append(y)
+    return torch.tensor(data, dtype=torch.float32)
+
+
 def main():
     # 设置参数
     seq_length = 64
     batch_size = 32
-    n_steps = 1000
-    n_epochs = 1_000_00
+    n_steps = 10000
+    n_epochs = 1_000_000
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dir_name = f'results_step{n_steps}_epoch{n_epochs}'
 
@@ -148,12 +167,18 @@ def main():
                 plt.title(f'Epoch {epoch + 1}')
                 plt.savefig(f'{dir_name}/sample_epoch_{epoch + 1}.png')
                 plt.close()
-
     print("Training completed!")
 
     # 保存模型
     torch.save(eps_model.state_dict(), f'{dir_name}/model.pt')
 
+def setup_seed(seed):
+    torch.manual_seed(seed)
+    torch.cuda.manual_seed_all(seed)
+    np.random.seed(seed)
+    random.seed(seed)
+    torch.backends.cudnn.deterministic = True
 
 if __name__ == "__main__":
+    setup_seed(100)
     main()
