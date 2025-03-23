@@ -2,56 +2,55 @@ import torch
 import torch.nn as nn
 
 
+def vocab_embedding(vocabs, len_seq, device):
+    # 词嵌入
+    vocab_to_idx = {"cos": 0, "sin": 1}
+    indices = [vocab_to_idx[word] for word in vocabs]
+    # 根据索引生成全0或全1的列表
+    expanded_indices = [torch.full((len_seq,), idx, dtype=torch.long, device=device) for idx in indices]
+    # 将列表转换为tensor
+    indices_tensor = torch.stack(expanded_indices)
+    return indices_tensor
 
 class NoisePredictor(torch.nn.Module):
-    def __init__(self, len_seq, vocab_size, drop_out=0.15, hidden_dim=32):
+    def __init__(self, len_seq, vocab_size, device, drop_out=0.15):
         super().__init__()
         self.len_seq = len_seq
-        self.hidden_dim = hidden_dim
+        self.hidden_dim = len_seq
         self.drop_out = drop_out
-        self.norm = nn.LayerNorm(self.len_seq * 2)
-
-        # 词嵌入
-        self.vocab_size = vocab_size
-        self.vocab_to_idx = {"cos": 0, "sin": 1}
+        self.device = device
+        self.norm = nn.LayerNorm(self.len_seq * 3)
 
         self.time_mlp = nn.Sequential(
-            nn.Linear(1, self.hidden_dim),
+            nn.Linear(1, self.len_seq),
             nn.SiLU(),
-            nn.Linear(self.hidden_dim, self.hidden_dim)
+            nn.Linear(self.len_seq, self.len_seq)
         )
 
         self.layer = nn.Sequential(
-            nn.Linear(self.len_seq * 2, self.len_seq * 2),
+            nn.Linear(self.len_seq * 3, self.len_seq * 3),
             nn.Dropout(self.drop_out),
             nn.SiLU(),
-            nn.Linear(self.len_seq * 2, self.len_seq * 2),
+            nn.Linear(self.len_seq * 3, self.len_seq * 3),
             nn.Dropout(self.drop_out),
             nn.SiLU(),
-            nn.Linear(self.len_seq * 2, self.len_seq * 2)
+            nn.Linear(self.len_seq * 3, self.len_seq * 3)
         )
 
         self.net = nn.Sequential(
-            nn.Linear(self.len_seq * 2, self.len_seq * 2),
+            nn.Linear(self.len_seq * 3, self.len_seq * 3),
             nn.Dropout(self.drop_out),
             nn.SiLU(),
-            nn.Linear(self.len_seq * 2, self.len_seq * 2),
+            nn.Linear(self.len_seq * 3, self.len_seq * 2),
             nn.Dropout(self.drop_out),
             nn.SiLU(),
             nn.Linear(self.len_seq * 2, self.len_seq)
         )
 
-    def vocab_embedding(self, vocabs):
-        embedding = nn.Embedding(self.vocab_size, self.hidden_dim)
-        indices = [self.vocab_to_idx[word] for word in vocabs]
-        indices_tensor = torch.tensor(indices, dtype=torch.long)
-        return embedding(indices_tensor)
-
     def forward(self, x, vocab, t):
-        vocab_emb = self.vocab_embedding(vocab).to(torch.device("cuda" if torch.cuda.is_available() else "cpu"))
         t = t.unsqueeze(-1).float()
         time_emb = self.time_mlp(t)
-        x = torch.cat([x, vocab_emb, time_emb], dim=1)
+        x = torch.cat([x, vocab, time_emb], dim=1)
         x = self.layer(x) + x
         x = self.norm(x)
         x = self.layer(x) + x
@@ -63,9 +62,10 @@ class NoisePredictor(torch.nn.Module):
 
 if __name__ == '__main__':
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    batch_size, len_seq = 1, 64
-    model = NoisePredictor(len_seq,  vocab_size=2)
-    x = torch.randn(batch_size, len_seq)
-    t = torch.randint(0, 100, (batch_size,))
-    output = model(x, ['cos'], t)
+    batch_size, len_seq = 1, 32
+    model = NoisePredictor(len_seq, vocab_size=2, device=device).to(device)
+    x = torch.randn(batch_size, len_seq, device=device)
+    t = torch.randint(0, 100, (batch_size,), device=device)
+    vocab = vocab_embedding(['cos'], len_seq, device)
+    output = model(x, vocab, t)
     print("Output shape:", output.shape)

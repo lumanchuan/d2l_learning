@@ -8,7 +8,17 @@ from NoisePredictNet import NoisePredictor
 import numpy as np
 import os
 
-# 扩散模型
+def vocab_embedding(vocabs, len_seq, device):
+    # 词嵌入
+    vocab_to_idx = {"cos": 0, "sin": 1}
+    indices = [vocab_to_idx[word] for word in vocabs]
+    # 根据索引生成全0或全1的列表
+    expanded_indices = [torch.full((len_seq,), idx, dtype=torch.long, device=device) for idx in indices]
+    # 将列表转换为tensor
+    indices_tensor = torch.stack(expanded_indices)
+    return indices_tensor
+
+# 条件扩散模型
 class GuidanceDenoiseDiffusion:
     def __init__(self, n_steps, device):
         self.n_steps = n_steps
@@ -47,13 +57,12 @@ class GuidanceDenoiseDiffusion:
     def loss(self, eps_model, x_vocab):
         x_0 = torch.tensor([item[0] for item in x_vocab], dtype=torch.float32, device=self.device)
         vocabs = [item[1] for item in x_vocab]
-
+        vocabs = vocab_embedding(vocabs, x_0.shape[1], self.device)
         batch_size = x_0.shape[0]
         t = torch.randint(0, self.n_steps, (batch_size,), device=self.device)
-        noise = torch.randn_like(x_0)
+        noise = torch.randn_like(x_0, device=self.device)
         x_t, target = self.q_sample(x_0, t, noise)
         eps_theta = eps_model(x_t, vocabs, t)
-
         return torch.nn.functional.mse_loss(eps_theta, target)
 
 def generate_data(batch_size, seq_length):
@@ -67,13 +76,21 @@ def generate_data(batch_size, seq_length):
         data.append((y, 'cos'))
     return data
 
+def generate_sin_data(batch_size, seq_length, noise_scale):
+    """生成正弦波训练数据"""
+    x = np.linspace(0, 2 * np.pi, seq_length)
+    data = []
+    for _ in range(batch_size):
+        y = np.sin(x) + np.random.normal(0, noise_scale, seq_length)
+        data.append(y)
+    return torch.tensor(data, dtype=torch.float32)
 
 def main():
     # 设置参数
-    len_seq = 64
+    len_seq = 32
     batch_size = 32
     n_steps = 1000
-    n_epochs = 1_000_000
+    n_epochs = 500_000
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     dir_name = f'results_step{n_steps}_epoch{n_epochs}'
 
@@ -82,7 +99,7 @@ def main():
         os.makedirs(dir_name)
 
     # 初始化模型
-    eps_model = NoisePredictor(len_seq, 2).to(device)
+    eps_model = NoisePredictor(len_seq, 2, device).to(device)
     diffusion = GuidanceDenoiseDiffusion(n_steps=n_steps, device=device)
     optimizer = torch.optim.Adam(eps_model.parameters(), lr=1e-4)
 
@@ -100,11 +117,11 @@ def main():
             print(f"Epoch {epoch + 1}, Loss: {loss.item():.4f}")
             # 生成样本
             with torch.no_grad():
-                # 去噪起点为纯噪声生成sin
-                x_sin = torch.randn(1, len_seq).to(device)
+                # 去噪起点有噪声的sin生成sin
+                x_sin = generate_sin_data(1, len_seq, 0.3).to(device)
                 for t in range(n_steps - 1, -1, -1):
                     t = torch.full((1,), t, device=device)
-                    x_sin = diffusion.p_sample(eps_model, x_sin, t, ['sin'])
+                    x_sin = diffusion.p_sample(eps_model, x_sin, t, vocab_embedding(['sin'], len_seq, device))
 
                 # 绘制结果
                 plt.figure(figsize=(10, 4))
